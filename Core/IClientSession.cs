@@ -30,7 +30,8 @@ namespace SuperSocket.ClientEngine
         bool TrySend(ArraySegment<byte> segment);
 
         bool TrySend(IList<ArraySegment<byte>> segments);
-
+        bool Reconnect();
+        bool IsSocketConnected();
         void Close();
 
         event EventHandler Connected;

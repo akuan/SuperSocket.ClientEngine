@@ -6,12 +6,14 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using log4net;
 using SuperSocket.ProtoBase;
 
 namespace SuperSocket.ClientEngine
 {
     public abstract class EasyClientBase
     {
+        private static readonly ILog log = LogManager.GetLogger(typeof(EasyClientBase));
         private IClientSession m_Session;
         private TaskCompletionSource<bool> m_ConnectTaskSource;
         private TaskCompletionSource<bool> m_CloseTaskSource;
@@ -62,6 +64,13 @@ namespace SuperSocket.ClientEngine
                 return session.Socket;
             }
         }
+        public IClientSession Session
+        {
+            get
+            {
+                return m_Session;
+            }
+        }
 
         public EasyClientBase()
         {
@@ -76,7 +85,11 @@ namespace SuperSocket.ClientEngine
         public async Task<bool> ConnectAsync(EndPoint remoteEndPoint)
         {
             if (PipeLineProcessor == null)
+            {
+                log.Error("ConnectAsync Error: This client has not been initialized.");
                 throw new Exception("This client has not been initialized.");
+            }
+                
 
             var connectTaskSrc = InitConnect(remoteEndPoint);
             return await connectTaskSrc.Task.ConfigureAwait(false);
@@ -172,7 +185,10 @@ namespace SuperSocket.ClientEngine
             var session = m_Session;
             
             if(!m_Connected || session == null)
+            {
+                log.Error("Send Error:The socket is not connected.");
                 throw new Exception("The socket is not connected.");
+            }
 
             session.Send(segment);
         }
@@ -182,13 +198,17 @@ namespace SuperSocket.ClientEngine
             var session = m_Session;
             
             if(!m_Connected || session == null)
+            {
+                log.Error("Send Error: The socket is not connected.");
                 throw new Exception("The socket is not connected.");
+            }
+              
 
             session.Send(segments);
         }
 
 #if AWAIT
-        public async Task<bool> Close()
+        public virtual async Task<bool> Close()
         {
             var session = m_Session;
             
@@ -198,8 +218,7 @@ namespace SuperSocket.ClientEngine
                 m_CloseTaskSource = closeTaskSrc;
                 session.Close();
                 return await closeTaskSrc.Task.ConfigureAwait(false);
-            }
-
+            }             
             return await Task.FromResult(false);
         }
  #else
@@ -231,6 +250,7 @@ namespace SuperSocket.ClientEngine
             {
                 OnError(exc);
                 m_Session.Close();
+                EE.LogError("Receive Data Fail:",exc,log);
                 return;
             }
 

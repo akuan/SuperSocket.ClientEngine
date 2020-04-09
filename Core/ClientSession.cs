@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 
 namespace SuperSocket.ClientEngine
@@ -168,8 +167,7 @@ namespace SuperSocket.ClientEngine
                 }
             }
 
-            IsConnected = true;
-
+            IsConnected = true;            
             var handler = m_Connected;
             if (handler == null)
                 return;
@@ -214,6 +212,14 @@ namespace SuperSocket.ClientEngine
         protected virtual void SetBuffer(ArraySegment<byte> bufferSegment)
         {
             Buffer = bufferSegment;
+        }
+        public  virtual bool Reconnect()
+        {
+            return true;
+        }
+        public virtual bool IsSocketConnected()
+        {
+            return IsConnected;
         }
     }
 }

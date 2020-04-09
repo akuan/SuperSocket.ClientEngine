@@ -1,17 +1,20 @@
-﻿using System;
+﻿using log4net;
+using SuperSocket.ProtoBase;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 
 namespace SuperSocket.ClientEngine
 {
     public abstract class TcpClientSession : ClientSession
     {
+        private static readonly ILog log = LogManager.GetLogger(typeof(TcpClientSession));
         protected string HostName { get; private set; }
-
-        private bool m_InConnecting = false;        
+        private ManualResetEvent ConnectTimeout= new ManualResetEvent(false);       
+        private bool m_InConnecting = false;
+        private EndPoint m_RemoteEndPoint;
 
         public TcpClientSession()
             : base()
@@ -30,7 +33,11 @@ namespace SuperSocket.ClientEngine
             set
             {
                 if (m_InConnecting || IsConnected)
-                    throw new Exception("You cannot set LocalEndPoint after you start the connection.");
+                {
+                    log.Error("Set LocalEndPoint Fail: You cannot set LocalEndPoint after you start the connection.");
+                    // throw new Exception("You cannot set LocalEndPoint after you start the connection.");
+                    return;
+                }
 
                 base.LocalEndPoint = value;
             }
@@ -47,7 +54,11 @@ namespace SuperSocket.ClientEngine
             set
             {
                 if (Buffer.Array != null)
-                    throw new Exception("ReceiveBufferSize cannot be set after the socket has been connected!");
+                {
+                    log.Error("ReceiveBufferSize cannot be set after the socket has been connected!");
+                    //throw new Exception("ReceiveBufferSize cannot be set after the socket has been connected!");
+                }
+                  
 
                 base.ReceiveBufferSize = value;
             }
@@ -91,8 +102,12 @@ namespace SuperSocket.ClientEngine
         public override void Connect(EndPoint remoteEndPoint)
         {
             if (remoteEndPoint == null)
-                throw new ArgumentNullException("remoteEndPoint");
-
+            {
+                log.Error("Connect Error :remoteEndPoint  is null.");
+                throw new ArgumentNullException("remoteEndPoint is null");
+            }
+               
+            m_RemoteEndPoint = remoteEndPoint;
             var dnsEndPoint = remoteEndPoint as DnsEndPoint;
 
             if (dnsEndPoint != null)
@@ -104,10 +119,18 @@ namespace SuperSocket.ClientEngine
             }
 
             if (m_InConnecting)
-                throw new Exception("The socket is connecting, cannot connect again!");
+            {
+                log.Error("The socket is connecting, cannot connect again!");
+                return;
+                //throw new Exception("The socket is connecting, cannot connect again!");
+            } 
 
             if (Client != null)
+            {
+                log.Error("The socket is connected, you needn't connect again!");
                 throw new Exception("The socket is connected, you needn't connect again!");
+            }
+              
 
             //If there is a proxy set, connect the proxy server by proxy connector
             if (Proxy != null)
@@ -159,7 +182,7 @@ namespace SuperSocket.ClientEngine
 
                 if (e != null)
                     e.Dispose();
-                
+                ConnectTimeout.Set();
                 return;
             }
 
@@ -168,6 +191,7 @@ namespace SuperSocket.ClientEngine
                 m_InConnecting = false;
                 OnError(new SocketException((int)e.SocketError));
                 e.Dispose();
+                ConnectTimeout.Set();
                 return;
             }
 
@@ -175,6 +199,7 @@ namespace SuperSocket.ClientEngine
             {
                 m_InConnecting = false;
                 OnError(new SocketException((int)SocketError.ConnectionAborted));
+                ConnectTimeout.Set();
                 return;
             }
 
@@ -183,7 +208,7 @@ namespace SuperSocket.ClientEngine
             if (!socket.Connected)
             {
                 m_InConnecting = false;
-
+                ConnectTimeout.Set();
                 var socketError = SocketError.HostUnreachable;
 
 #if !SILVERLIGHT && !NETFX_CORE
@@ -191,9 +216,10 @@ namespace SuperSocket.ClientEngine
                 {
                     socketError = (SocketError)socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     socketError = SocketError.HostUnreachable;
+                    EE.LogError("GetSocketOption Error", ex,log);
                 }                
 #endif
                 OnError(new SocketException((int)socketError));
@@ -214,8 +240,9 @@ namespace SuperSocket.ClientEngine
                 // mono may throw an exception here
                 LocalEndPoint = socket.LocalEndPoint;
             }
-            catch
+            catch(Exception ex)
             {
+                EE.LogError("Get socket.LocalEndPoint Error", ex, log);
             }
 #endif
 
@@ -243,15 +270,105 @@ namespace SuperSocket.ClientEngine
             {
                 //Set keep alive
                 Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                //byte[] inValue = new byte[] { 1, 0, 0, 0, 0x20, 0x4e, 0, 0, 0xd0, 0x07, 0, 0 };// 首次探测时间20 秒, 间隔侦测时间2 秒
+                byte[] inValue = new byte[] { 1, 0, 0, 0, 0x88, 0x13, 0, 0, 0xd0, 0x07, 0, 0 };// 首次探测时间5 秒, 间隔侦测时间2 秒
+                Client.IOControl(IOControlCode.KeepAliveValues, inValue, null);
             }
-            catch
+            catch(Exception ex)
             {
+                EE.LogError("SetSocketOption Error", ex, log);
             }
-            
+            ConnectTimeout.Set();
 #endif
             OnGetSocket(e);
         }
 
+        /// 当socket.connected为false时，进一步确定下当前连接状态
+        /// 
+        /// 
+        public override bool IsSocketConnected()
+        {
+            #region remarks
+            /********************************************************************************************
+             * 当Socket.Conneted为false时， 如果您需要确定连接的当前状态，请进行非阻塞、零字节的 Send 调用。
+             * 如果该调用成功返回或引发 WAEWOULDBLOCK 错误代码 (10035)，则该套接字仍然处于连接状态； 
+             * 否则，该套接字不再处于连接状态。
+             * Depending on http://msdn.microsoft.com/zh-cn/library/system.net.sockets.socket.connected.aspx?cs-save-lang=1&cs-lang=csharp#code-snippet-2
+            ********************************************************************************************/
+            #endregion
+
+            #region 过程
+            if (Client == null)
+            {
+                return false;
+            }
+            // This is how you can determine whether a socket is still connected.
+            bool connectState = true;
+            bool blockingState = Client.Blocking;
+            try
+            {
+                byte[] tmp = new byte[1];
+
+                Client.Blocking = false;
+                Client.Send(tmp, 0, 0);
+                //Console.WriteLine("Connected!");
+                connectState = true; //若Send错误会跳去执行catch体，而不会执行其try体里其之后的代码
+            }
+            catch (SocketException e)
+            {
+                // 10035 == WSAEWOULDBLOCK
+                if (e.NativeErrorCode.Equals(10035))
+                {
+                    //Console.WriteLine("Still Connected, but the Send would block");
+                    connectState = true;
+                }
+                else
+                {
+                    //Console.WriteLine("Disconnected: error code {0}!", e.NativeErrorCode);
+                    connectState = false;
+                }
+            }
+            finally
+            {
+                Client.Blocking = blockingState;
+            }
+            //Console.WriteLine("Connected: {0}", client.Connected);
+            return connectState;
+            #endregion
+        }
+
+        ///
+
+        /// 另一种判断connected的方法，但未检测对端网线断开或ungraceful的情况
+        /// 
+        /// 
+        /// 
+        public static bool IsSocketConnected(Socket s)
+        {
+            #region remarks
+            /* As zendar wrote, it is nice to use the Socket.Poll and Socket.Available, but you need to take into consideration 
+             * that the socket might not have been initialized in the first place. 
+             * This is the last (I believe) piece of information and it is supplied by the Socket.Connected property. 
+             * The revised version of the method would looks something like this: 
+             * from：http://stackoverflow.com/questions/2661764/how-to-check-if-a-socket-is-connected-disconnected-in-c */
+            #endregion
+
+            #region 过程
+
+            if (s == null)
+                return false;
+            return !((s.Poll(1000, SelectMode.SelectRead) && (s.Available == 0)) || !s.Connected);
+
+            /* The long, but simpler-to-understand version:
+                    bool part1 = s.Poll(1000, SelectMode.SelectRead);
+                    bool part2 = (s.Available == 0);
+                    if ((part1 && part2 ) || !s.Connected)
+                        return false;
+                    else
+                        return true;
+            */
+            #endregion
+        }
         private string GetHostOfEndPoint(EndPoint endPoint)
         {
             var dnsEndPoint = endPoint as DnsEndPoint;
@@ -366,7 +483,9 @@ namespace SuperSocket.ClientEngine
         {
             if (segment.Array == null || segment.Count == 0)
             {
-                throw new Exception("The data to be sent cannot be empty.");
+                log.Error("Send Data Error:The data to be sent cannot be empty.");
+                //throw new Exception("The data to be sent cannot be empty.");
+                return true;
             }
 
             if (!DetectConnected())
@@ -389,7 +508,9 @@ namespace SuperSocket.ClientEngine
         {
             if (segments == null || segments.Count == 0)
             {
-                throw new ArgumentNullException("segments");
+                log.Error("Send Data Error:segments sent cannot be empty.");
+                // throw new ArgumentNullException("segments");
+                return true;
             }
 
             for (var i = 0; i < segments.Count; i++)
@@ -398,7 +519,9 @@ namespace SuperSocket.ClientEngine
                 
                 if (seg.Count == 0)
                 {
-                    throw new Exception("The data piece to be sent cannot be empty.");
+                    log.Error("Send Data Error:The data piece to be sent cannot be empty.");
+                    //throw new Exception("The data piece to be sent cannot be empty.");
+                    return true;
                 }
             }
 
@@ -452,6 +575,29 @@ namespace SuperSocket.ClientEngine
         {
             if (EnsureSocketClosed())
                 OnClosed();
+        }
+
+        /// <summary>
+        /// 断线重连函数
+        /// </summary>
+        /// <returns></returns>
+        public override bool Reconnect()
+        {
+            try
+            {
+                Close();
+                Connect(m_RemoteEndPoint);
+                ConnectTimeout.Reset();
+                if (ConnectTimeout.WaitOne(10000, false))//直到timeout，或者TimeoutObject.se
+                {
+                    return IsConnected;
+                }               
+            }
+            catch (Exception ex)
+            {
+                EE.LogError("Reconnect Error", ex, log);
+            }
+            return false;
         }
     }
 }
