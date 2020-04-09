@@ -52,10 +52,8 @@ namespace SuperSocket.ClientEngine
         protected override void HandlePackage(IPackageInfo package)
         {
             var handler = m_Handler;
-
             if (handler == null)
                 return;
-
             handler(package);
         }
         public override async Task<bool> Close()

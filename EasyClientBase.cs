@@ -183,27 +183,38 @@ namespace SuperSocket.ClientEngine
         public void Send(ArraySegment<byte> segment)
         {
             var session = m_Session;
-            
-            if(!m_Connected || session == null)
+            if (session == null)
             {
                 log.Error("Send Error:The socket is not connected.");
                 throw new Exception("The socket is not connected.");
             }
-
+            if (!m_Connected)
+            {
+                log.Error("Send Error:The socket is not connected.");
+                session.Reconnect();
+                return;
+                //throw new Exception("The socket is not connected.");
+            }
             session.Send(segment);
         }
 
         public void Send(List<ArraySegment<byte>> segments)
         {
             var session = m_Session;
-            
-            if(!m_Connected || session == null)
+
+            if (session == null)
             {
-                log.Error("Send Error: The socket is not connected.");
+                log.Error("Send Error:The socket is not connected.");
                 throw new Exception("The socket is not connected.");
             }
-              
-
+            if (!m_Connected)
+            {
+                log.Error("Send Error:The socket is not connected.");
+                session.Reconnect();
+                return;
+                //log.Error("Send Error: The socket is not connected.");
+                //throw new Exception("The socket is not connected.");
+            }
             session.Send(segments);
         }
 
