@@ -585,6 +585,12 @@ namespace SuperSocket.ClientEngine
         {
             try
             {
+                string remote = "";
+                if(m_RemoteEndPoint!=null&& m_RemoteEndPoint is IPEndPoint ipEndPoint)
+                {
+                    remote = $"{ ipEndPoint.Address}:{ipEndPoint.Port}";
+                }                 
+                log.Warn($"Reconnect to {remote}");
                 Close();
                 Connect(m_RemoteEndPoint);
                 ConnectTimeout.Reset();
